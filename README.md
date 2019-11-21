@@ -19,3 +19,5 @@
 
 ### Tested on Win10 PC, should be cross-platform enabled
 ### Python 3.7.5
+
+![SegmentedWomanFace](SegmentedWomanFace.png)
