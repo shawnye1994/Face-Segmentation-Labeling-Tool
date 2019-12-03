@@ -30,7 +30,7 @@ import time
 import shutil
 
 class MaskSeg:
-    def __init__(self, img_path, mask_save_path, masked_frames_path, crop_flag = True):
+    def __init__(self, img_path, mask_save_path, masked_frames_path, old_mask_file, crop_flag = True):
         self.ori_img = cv2.imread(str(img_path.absolute())).astype(np.float32)
         self.img_path = img_path
         self.mask_save_path = mask_save_path
@@ -39,8 +39,13 @@ class MaskSeg:
         if self.ori_img is None:
             print(f'Failed to load image file: {img_path.absolute()}')
             sys.exit(1)
+        if old_mask_file != None:
+            self.old_mask = cv2.imread(str(old_mask_file.absolute())).astype(np.float32)
+        else:
+            self.old_mask = None
 
         self.img = self.ori_img.copy()
+        self.cropped_old_mask = None
         if self.crop_flag:
             self.crop_resized_img, self.crop_resize_ratio = self.resize_ratio(self.img)
             self.crop_rec_lt = None
@@ -49,13 +54,16 @@ class MaskSeg:
             self.crop_show_img = self.crop_resized_img.copy()
             self.crop_windowname = str(self.img_path.name).strip().split('.')[0] + '_crop'
             self.prev_pt = None
-            self.img = self.crop_image()
+            self.img, self.cropped_old_mask = self.crop_image()
             cv2.destroyAllWindows()
 
         self.windowname = str(img_path.name).strip().split('.')[0]
         cv2.namedWindow(self.windowname, cv2.WINDOW_NORMAL)
-        self.mask = np.zeros_like(self.img)
-
+        if self.cropped_old_mask is not None:
+            self.mask = self.cropped_old_mask
+        else:
+            self.mask = np.zeros_like(self.img)
+    
         self.add_flag = True
         self.prev_pt = None
         self.verts = []
@@ -110,6 +118,8 @@ class MaskSeg:
                 cv2.imwrite(str(self.masked_frames_path.joinpath('temp_masked')) + self.img_path.name, temp_masked_img)
                 if self.crop_flag:
                     self.mask = cv2.warpAffine(self.mask.astype(np.uint8), self.crop_trans_mat, (self.ori_img.shape[1], self.ori_img.shape[0]))
+                if self.old_mask is not None:
+                    self.mask = np.clip(0, 255, self.mask + self.old_mask)
                 cv2.imwrite(str(mask_file_name.absolute()), self.mask)
                 masked_img = self.mask/255. * self.ori_img
                 file_name = self.masked_frames_path.joinpath('masked_' + self.img_path.name)
@@ -161,11 +171,15 @@ class MaskSeg:
             if ch == 27 and self.crop_rec_lt != None and self.crop_rec_rb != None:
                 (t, l), (b, r) = self.correct_lt_rb()
                 cropped_img = self.img[l:r, t:b]
+                if self.old_mask is not None:
+                    old_cropped_mask = self.old_mask[l:r, t:b]
+                else:
+                    old_cropped_mask = None
                 self.crop_trans_mat[0,2] = t
                 self.crop_trans_mat[1,2] = l
                 break
         
-        return cropped_img
+        return cropped_img, old_cropped_mask
 
     def crop_on_mouse(self, event, x, y, flags, param):
         pt = (x, y)
@@ -221,18 +235,34 @@ class MaskSeg:
                 return img, 1.0
         
 
-def seg_main(frames_path, mask_save_path, masked_frame_path):
+def seg_main(frames_path, mask_save_path, masked_frame_path, old_mask_path = None):
     images_list = []
     images_list.extend(frames_path.glob('*.jpg'))
     images_list.extend(frames_path.glob('*.png'))
     for f in images_list:
-        MaskSeg(f.absolute(), mask_save_path, masked_frame_path)
+        old_mask_file = None
+        if old_mask_path != None:
+            old_mask_file = old_mask_path.joinpath('mask_' + f.name)
+            if not old_mask_file.is_file():
+                print(f'Old mask {old_mask_file.absolute()} does not exsit!!')
+                print(f'Init mask with empty.')
+                old_mask_file = None
+        MaskSeg(f.absolute(), mask_save_path, masked_frame_path, old_mask_file)
         shutil.move(f.absolute().as_posix(), masked_frame_path.absolute().as_posix())
 
 
 if __name__ == '__main__':
     print(__doc__)
     frames_path = Path(__file__).parent.joinpath('V1_frames')  #input face images
+
     mask_save_path = Path(__file__).parent.joinpath('V1_mask') #saved mask dir
+    if not mask_save_path.exists():
+        mask_save_path.mkdir(parents=True, exist_ok=True)
+
     masked_frame_path = Path(__file__).parent.joinpath('V1_masked_frames') #saved segmented faces dir
-    seg_main(frames_path, mask_save_path, masked_frame_path)
+    if not masked_frame_path.exists():
+        masked_frame_path.mkdir(parents=True, exist_ok=True)
+
+    #old_mask_path = Path(__file__).parent.joinpath('V1_old_mask') #Old mask for loading
+    old_mask_path = None 
+    seg_main(frames_path, mask_save_path, masked_frame_path, old_mask_path)
